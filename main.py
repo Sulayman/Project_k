@@ -1,99 +1,138 @@
 import requests
+import json
 from typing import List, Tuple
 
 
-def get_distance_information(from_loc: str, to_loc: str) -> int:
-    """
-    调用腾讯地图API获取两个坐标点之间的距离信息
-    :param from_loc: 起点坐标
-    :param to_loc: 终点坐标
-    :return: 两点之间距离（单位：米）
-    """
-    url = f"https://apis.map.qq.com/ws/distance/v1/?mode=walking&from={from_loc}&to={to_loc}&key=YOUR_TENCENT_MAP_API_KEY"
-    response = requests.get(url)
-    data = response.json()
-    if data["status"] != 0:
-        raise Exception("Failed to get distance information")
-    return data["result"]["elements"][0]["distance"]
+class Common:
+    @staticmethod
+    def get_distance_information(from_address: str, to_address: str) -> Tuple[str, int, int]:
+        """获取两点间距离信息"""
+        url = 'https://apis.map.qq.com/ws/distance/v1/'
+        params = {
+            'mode': 'driving',
+            'from': from_address,
+            'to': to_address,
+            'key': '您的腾讯地图Key'
+        }
+        try:
+            response = requests.get(url, params=params)
+            res_json = json.loads(response.text)
+            if res_json['status'] == 0:
+                results = res_json['result']['elements'][0]
+                return (results['distance'], results['duration'], results['duration_traffic'])
+            else:
+                return ('', 0, 0)
+        except:
+            return ('', 0, 0)
 
 
-def get_available_deliveryman(deliveryman_data: List[dict], restaurant_location: str) -> List[dict]:
-    """
-    获取当前有空闲配送员的列表
-    :param deliveryman_data: 配送员列表
-    :param restaurant_location: 餐厅位置
-    :return: 空闲配送员列表
-    """
-    available_deliveryman = []
-    for deliveryman in deliveryman_data:
-        if deliveryman["delivering_order_count"] > 0:
-            continue
-        from_loc = deliveryman["coordinate"]
-        to_loc = restaurant_location
-        distance = get_distance_information(from_loc, to_loc)
-        if distance > 5000:
-            continue
-        available_deliveryman.append(deliveryman)
-    return available_deliveryman
+class Deliveryman:
+    def __init__(self, name: str, current_location: str, max_capacity: int):
+        self.name = name
+        self.current_location = current_location
+        self.max_capacity = max_capacity
+        self.current_capacity = 0
 
+    def __str__(self):
+        return f"Name: {self.name}, Current Location: {self.current_location}, Max Capacity: {self.max_capacity}, Current Capacity: {self.current_capacity}"
 
-def sort_deliveryman(deliveryman_list: List[dict], costumer_location: str) -> List[dict]:
-    """
-    对可用的配送员按照优先级排序
-    :param deliveryman_list: 可用配送员列表
-    :param costumer_location: 客户位置
-    :return: 排序后的配送员列表
-    """
-    # 按距离从近到远排序
-    deliveryman_list.sort(key=lambda x: get_distance_information(x["coordinate"], costumer_location))
-    # 按已完成订单数量从少到多排序
-    deliveryman_list.sort(key=lambda x: x["delivered_order_count"])
-    # 按正在配送订单数从少到多排序
-    deliveryman_list.sort(key=lambda x: x["delivering_order_count"])
-    return deliveryman_list
-
-def choose_deliveryman(prepare_time: int, restaurant_location: str, deliverymen: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    从可用的配送员中选出最优的一个
-    :param prepare_time: int, 餐厅准备时间，单位为分钟
-    :param restaurant_location: str, 餐厅经纬度，用逗号分隔
-    :param deliverymen: List[Dict[str, Any]], 可用的配送员列表
-    :return: Dict[str, Any], 最优的配送员
-    """
-    # 根据餐厅和客户位置计算距离
-    client_location = orders_data['costumer_data']['costumer_location']
-    restaurant_client_distance = Common.get_distance_information(restaurant_location, client_location)
-    # 根据时间和距离计算订单最晚的送达时间
-    latest_delivery_time = Common.get_latest_delivery_time(orders_data, restaurant_client_distance)
-
-    # 计算每个配送员在最晚送达时间前能够完成的配送单数
-    for deliveryman in deliverymen:
-        max_order_count = Common.get_deliveryman_max_order_count(deliveryman, prepare_time, latest_delivery_time, restaurant_client_distance)
-        deliveryman['max_order_count'] = max_order_count
-
-    # 按照可配送单数从大到小排序
-    deliverymen = sorted(deliverymen, key=lambda x: x['max_order_count'], reverse=True)
-
-    # 选出最优的可配送单数
-    max_order_count = deliverymen[0]['max_order_count']
-    best_deliverymen = []
-    for deliveryman in deliverymen:
-        if deliveryman['max_order_count'] == max_order_count:
-            best_deliverymen.append(deliveryman)
+    def assign_order(self, order: dict) -> bool:
+        """Assign order to deliveryman"""
+        if order['capacity'] + self.current_capacity <= self.max_capacity:
+            self.current_capacity += order['capacity']
+            return True
         else:
-            break
+            return False
 
-    # 选出最优的可配送单数中，距离最近的配送员
-    best_deliveryman = None
-    best_distance = None
-    for deliveryman in best_deliverymen:
-        if not deliveryman['orders']:
-            best_deliveryman = deliveryman
-            break
 
-        distance = Common.get_deliveryman_distance_to_restaurant(deliveryman, restaurant_location)
-        if not best_distance or distance < best_distance:
-            best_deliveryman = deliveryman
-            best_distance = distance
+def get_available_deliveryman(deliverymen: List[Deliveryman]) -> List[Deliveryman]:
+    """Get available deliveryman"""
+    available_deliverymen = []
+    for deliveryman in deliverymen:
+        if deliveryman.current_capacity < deliveryman.max_capacity:
+            available_deliverymen.append(deliveryman)
+    return available_deliverymen
 
-    return best_deliveryman
+
+def sort_deliveryman(deliverymen: List[Deliveryman], order: dict, restaurant_location: str) -> List[Tuple[Deliveryman, float]]:
+    """Sort deliveryman by priority"""
+    priority_list = []
+    for deliveryman in deliverymen:
+        distance = Common.get_distance_information(deliveryman.current_location, order['destination'])[0]
+        priority = 1 / distance
+        priority_list.append((deliveryman, priority))
+
+    # Sort deliveryman by priority
+    priority_list.sort(key=lambda x: x[1], reverse=True)
+    return priority_list
+
+
+def choose_deliveryman(deliverymen: List[Deliveryman], order: dict, prepare_time: int, restaurant_location: str) -> Deliveryman:
+    """Choose the optimal deliveryman for the order"""
+    priority_list = sort_deliveryman(deliverymen, order, restaurant_location)
+
+    for deliveryman, _ in priority_list:
+        # Calculate time to deliver the order
+        delivery_time = Common.get_distance_information(deliveryman.current_location, order['destination'])[2] + prepare_time
+
+        # Check if the deliveryman can deliver the order before the deadline
+        if delivery_time <= order['deadline']:
+            # Assign the order to the deliveryman
+            if deliveryman.assign_order(order):
+                return deliveryman
+
+    # No available deliveryman can deliver the order before the deadline
+    return None
+
+
+def delivery(orders, deliverymen, restaurant_location, prepare_time=10):
+    """将订单分配给配送员，返回每个订单的配送员和配送时间"""
+    # 为每个订单计算最早的可配送时间
+    for order in orders:
+        order["earliest_delivery_time"] = order["order_time"] + timedelta(minutes=prepare_time)
+    
+    # 计算每个配送员的最早出发时间
+    for deliveryman in deliverymen:
+        deliveryman["earliest_departure_time"] = max(deliveryman["last_delivery_time"], datetime.now())
+        deliveryman["available"] = True
+    
+    # 找到可用的配送员并按照优先级排序
+    available_deliveryman = get_available_deliveryman(deliverymen)
+    if not available_deliveryman:
+        print("No deliveryman is available right now!")
+        return
+    
+    # 为订单选择最优的配送员
+    for order in orders:
+        deliveryman = choose_deliveryman(order["earliest_delivery_time"], restaurant_location, available_deliveryman)
+        if not deliveryman:
+            print(f"No available deliveryman for order {order['order_id']}")
+            continue
+        deliveryman["available"] = False
+        order["deliveryman_id"] = deliveryman["deliveryman_id"]
+        delivery_time = Common.get_distance_information(deliveryman["location"], restaurant_location) / deliveryman["speed"]
+        order["delivery_time"] = delivery_time
+        order["delivery_start_time"] = max(deliveryman["earliest_departure_time"], order["earliest_delivery_time"])
+        order["delivery_end_time"] = order["delivery_start_time"] + timedelta(minutes=delivery_time)
+        deliveryman["earliest_departure_time"] = order["delivery_end_time"]
+        deliveryman["last_delivery_time"] = order["delivery_end_time"]
+    
+    return orders, deliverymen
+
+if __name__ == '__main__':
+    orders_data = [
+        {"order_id": "1", "user_location": [39.903371, 116.409367], "restaurant_location": [39.908736, 116.395173], "delivery_time": 40, "deadline": 60},
+        {"order_id": "2", "user_location": [39.900584, 116.401318], "restaurant_location": [39.908805, 116.397291], "delivery_time": 30, "deadline": 90},
+        {"order_id": "3", "user_location": [39.914509, 116.404737], "restaurant_location": [39.90856, 116.399477], "delivery_time": 50, "deadline": 70},
+        {"order_id": "4", "user_location": [39.907463, 116.397144], "restaurant_location": [39.907463, 116.397144], "delivery_time": 60, "deadline": 80},
+        {"order_id": "5", "user_location": [39.914623, 116.404369], "restaurant_location": [39.903497, 116.406238], "delivery_time": 20, "deadline": 40},
+        {"order_id": "6", "user_location": [39.905358, 116.407537], "restaurant_location": [39.908901, 116.391711], "delivery_time": 70, "deadline": 90},
+    ]
+    available_deliveryman = get_available_deliveryman(orders_data)
+    prepare_time = 10
+    max_delivery_time = 60
+    max_delivery_count = 3
+    restaurant_location = [39.908736, 116.395173]
+    chosen_deliveryman = choose_deliveryman(prepare_time, restaurant_location, available_deliveryman, max_delivery_time, max_delivery_count)
+    if chosen_deliveryman:
+        delivery(orders_data, chosen_deliveryman, prepare_time)
